@@ -151,14 +151,20 @@ General notes
     }
 
     write-sdnexpresslog "Setting properties and adding NetworkController role on all computers in parallel."
-    invoke-command -ComputerName $ComputerNames {
-        function private:write-verbose { param([String] $Message) write-output "[V]"; write-output $Message}
-        function private:write-output { param([PSObject[]] $InputObject) write-output "$($InputObject.count)"; write-output $InputObject}
 
+    Invoke-Command -ErrorAction SilentlyContinue -ComputerName $ComputerNames {
         write-verbose "Setting registry keys and wsman parameters"
         reg add hklm\system\currentcontrolset\services\tcpip6\parameters /v DisabledComponents /t REG_DWORD /d 255 /f | out-null
         Set-Item WSMan:\localhost\Shell\MaxConcurrentUsers -Value 100 | out-null
         Set-Item WSMan:\localhost\MaxEnvelopeSizekb -Value 7000 | out-null
+        Restart-Service WinRM -Force 
+    } @CredentialParam  | Parse-RemoteOutput
+
+    Start-Sleep 10
+
+    invoke-command -ComputerName $ComputerNames {
+        function private:write-verbose { param([String] $Message) write-output "[V]"; write-output $Message}
+        function private:write-output { param([PSObject[]] $InputObject) write-output "$($InputObject.count)"; write-output $InputObject}
 
         write-verbose "Adding NetworkController feature if not already installed offline."
         add-windowsfeature NetworkController -IncludeAllSubFeature -IncludeManagementTools -Restart | out-null
@@ -2800,6 +2806,12 @@ function New-SDNExpressVM
     write-sdnexpresslog "Creating VM: $computername"
     try 
     {
+        $Generation = 2
+        if ($LocalVHDPath.EndsWith("vhd"))
+        {
+            $Generation = 1
+        }
+
         invoke-command -ComputerName $ComputerName  @CredentialParam -ScriptBlock {
             param(
                 [String] $VMName,
@@ -2807,7 +2819,8 @@ function New-SDNExpressVM
                 [Int64] $VMMemory,
                 [Int] $VMProcessorCount,
                 [String] $SwitchName,
-                [Object] $Nics
+                [Object] $Nics,
+                [Int] $Generation
             )
             function private:write-verbose { param([String] $Message) write-output "[V]"; write-output $Message}
             function private:write-output { param([PSObject[]] $InputObject) write-output "$($InputObject.count)"; write-output $InputObject}
@@ -2820,7 +2833,7 @@ function New-SDNExpressVM
             } else {
                 $FirstSwitch = $SwitchName
             }
-            $NewVM = New-VM -Generation 2 -Name $VMName -Path $LocalVMPath -MemoryStartupBytes $VMMemory -novhd -SwitchName $FirstSwitch
+            $NewVM = New-VM -Generation $Generation -Name $VMName -Path $LocalVMPath -MemoryStartupBytes $VMMemory -novhd -SwitchName $FirstSwitch
             write-verbose "Setting processor count to $VMProcessorCount."
             $NewVM | Set-VM -processorcount $VMProcessorCount | out-null
 
@@ -2884,7 +2897,7 @@ function New-SDNExpressVM
             $NewVM | Start-VM | out-null
             $newVM | stop-vm -turnoff -force | out-null
 
-        } -ArgumentList $VMName, $LocalVMPath, $VMMemory, $VMProcessorCount, $SwitchName, $Nics | Parse-RemoteOutput
+        } -ArgumentList $VMName, $LocalVMPath, $VMMemory, $VMProcessorCount, $SwitchName, $Nics, $Generation | Parse-RemoteOutput
                 
     } catch {
         write-sdnexpresslog "Exception creating VM: $($_.Exception.Message)"
@@ -3156,14 +3169,17 @@ while ($true) {
         )
         function private:write-verbose { param([String] $Message) write-output "[V]"; write-output $Message}
         function private:write-output { param([PSObject[]] $InputObject) write-output "$($InputObject.count)"; write-output $InputObject}
-
+        
         write-verbose "Adding VHD $vhdpath to $vmname."
         $vm = get-vm $vmname
         $vm | add-vmharddiskdrive -path $vhdpath
         
-        write-verbose "Making VHD first boot device."
-        $vhdd = $vm | get-vmharddiskdrive
-        $vm | set-vmfirmware -firstbootdevice $vhdd
+        if($VHDPath.EndsWith("vhdx"))
+        {
+            write-verbose "Making VHD first boot device."
+            $vhdd = $vm | get-vmharddiskdrive
+            $vm | set-vmfirmware -firstbootdevice $vhdd
+        }
 
         write-verbose "Starting VM $vmname."
         $vm | start-vm
