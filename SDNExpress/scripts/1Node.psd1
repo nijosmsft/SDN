@@ -12,7 +12,7 @@
 
     ManagementSubnet = "192.168.1.0/24"
     ManagementGateway = "192.168.1.1"
-    ManagementDNS = @("10.195.95.223")
+    ManagementDNS = @("10.195.95.224")
     ManagementVLANID = "0"
     ManagementRoutes = @('192.168.1.0/24')
 
